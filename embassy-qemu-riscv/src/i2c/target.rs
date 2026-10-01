@@ -194,7 +194,9 @@ impl<'d> I2c<'d, Blocking> {
         loop {
             let status = self.info.reg().status().read();
 
-            if status.rx_rdy().bit() {
+            // listen() cleared START; a new START assigns RX to the next transfer.
+            // STOP alone may still leave a final byte in the current transfer.
+            if status.rx_rdy().bit() && !status.start().bit() {
                 let byte = self.info.reg().data().read().data().bits();
                 if n < buf.len() {
                     buf[n] = byte;
@@ -335,7 +337,9 @@ impl<'d> I2c<'d, Async> {
         loop {
             let status = self.info.reg().status().read();
 
-            if status.rx_rdy().bit() {
+            // listen() cleared START; a new START assigns RX to the next transfer.
+            // STOP alone may still leave a final byte in the current transfer.
+            if status.rx_rdy().bit() && !status.start().bit() {
                 let byte = self.info.reg().data().read().data().bits();
                 if n < buf.len() {
                     buf[n] = byte;
@@ -519,5 +523,133 @@ impl embedded_mcu_hal::i2c::target::asynch::I2c for I2c<'_, Async> {
 
     async fn respond_to_write(&mut self, buf: &mut [u8]) -> Result<WriteStatus, Self::Error> {
         Ok(self.respond_to_write(buf).await)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::*;
+    use core::{future::Future, mem::ManuallyDrop, task::Context};
+    use std::boxed::Box;
+
+    const START: u32 = 1 << 1;
+    const STOP: u32 = 1 << 2;
+    const RESTART: u32 = 1 << 3;
+    const RX_RDY: u32 = 1 << 4;
+    const TX_DONE: u32 = 1 << 5;
+    const TX_NAK: u32 = 1 << 6;
+
+    fn bus<M: Mode>(status: u32) -> ManuallyDrop<I2c<'static, M>> {
+        // SAFETY: The PAC register block contains only u32 registers; zero is valid.
+        let regs = Box::leak(Box::new(unsafe {
+            core::mem::zeroed::<i2c_target::RegisterBlock>()
+        }));
+        // SAFETY: This is test-owned memory, not hardware.
+        regs.status().write(|w| unsafe { w.bits(status) });
+        // SAFETY: This is test-owned memory, not hardware.
+        regs.data().write(|w| unsafe { w.bits(0xa5) });
+        let info = Box::leak(Box::new(Info {
+            reg: regs,
+            waker: AtomicWaker::new(),
+        }));
+
+        // Drop would access the real PLIC, not the test register block.
+        ManuallyDrop::new(I2c {
+            info,
+            address: 0x2c,
+            restart_pending: false,
+            _phantom: PhantomData,
+        })
+    }
+
+    fn ready<T>(future: impl Future<Output = T>) -> T {
+        let mut future = core::pin::pin!(future);
+        match future
+            .as_mut()
+            .poll(&mut Context::from_waker(core::task::Waker::noop()))
+        {
+            Poll::Ready(value) => value,
+            Poll::Pending => panic!("latched status must complete without waiting"),
+        }
+    }
+
+    #[test]
+    fn current_rx_byte_is_not_lost_at_stop() {
+        for status in [RX_RDY, RX_RDY | STOP] {
+            let mut blocking = bus::<Blocking>(status);
+            let mut data = [0];
+            assert!(matches!(
+                blocking.respond_to_write(&mut data),
+                WriteStatus::BufferFull(1)
+            ));
+            assert_eq!(data, [0xa5]);
+
+            let mut asynchronous = bus::<Async>(status);
+            data = [0];
+            assert!(matches!(
+                ready(asynchronous.respond_to_write(&mut data)),
+                WriteStatus::BufferFull(1)
+            ));
+            assert_eq!(data, [0xa5]);
+        }
+    }
+
+    #[test]
+    fn next_rx_byte_is_not_consumed_before_stop() {
+        let mut blocking = bus::<Blocking>(STOP | START | RX_RDY);
+        let mut data = [0];
+        assert!(matches!(
+            blocking.respond_to_write(&mut data),
+            WriteStatus::Stopped(0)
+        ));
+        assert_eq!(data, [0]);
+        assert_eq!(blocking.info.reg().ctrl().read().bits(), 0);
+
+        let mut asynchronous = bus::<Async>(STOP | START | RX_RDY);
+        assert!(matches!(
+            ready(asynchronous.respond_to_write(&mut data)),
+            WriteStatus::Stopped(0)
+        ));
+        assert_eq!(data, [0]);
+        assert_eq!(asynchronous.info.reg().ctrl().read().bits(), 0);
+    }
+
+    #[test]
+    fn next_rx_byte_is_not_consumed_before_repeated_start() {
+        let mut blocking = bus::<Blocking>(START | RESTART | RX_RDY);
+        let mut data = [0];
+        assert!(matches!(
+            blocking.respond_to_write(&mut data),
+            WriteStatus::Restarted(0)
+        ));
+        assert_eq!(data, [0]);
+        assert_eq!(blocking.info.reg().ctrl().read().bits(), 0);
+
+        let mut asynchronous = bus::<Async>(START | RESTART | RX_RDY);
+        assert!(matches!(
+            ready(asynchronous.respond_to_write(&mut data)),
+            WriteStatus::Restarted(0)
+        ));
+        assert_eq!(data, [0]);
+        assert_eq!(asynchronous.info.reg().ctrl().read().bits(), 0);
+    }
+
+    #[test]
+    fn normal_read_completes_after_controller_nak() {
+        let mut blocking = bus::<Blocking>(TX_DONE | TX_NAK);
+        assert!(matches!(
+            blocking.respond_to_read(&[0x5a]),
+            ReadStatus::Complete(1)
+        ));
+        assert_eq!(blocking.info.reg().data().read().data().bits(), 0x5a);
+
+        let mut asynchronous = bus::<Async>(TX_DONE | TX_NAK);
+        assert!(matches!(
+            ready(asynchronous.respond_to_read(&[0x5a])),
+            ReadStatus::Complete(1)
+        ));
+        assert_eq!(asynchronous.info.reg().data().read().data().bits(), 0x5a);
     }
 }
