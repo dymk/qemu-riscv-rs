@@ -7,6 +7,7 @@ pub struct RegisterBlock {
     irq_pol: IrqPol,
     irq_en: IrqEn,
     irq_pend: IrqPend,
+    input_initialized: InputInitialized,
 }
 impl RegisterBlock {
     #[doc = "0x00 - Input level (one bit per pin, driven by each pin's peer)"]
@@ -39,6 +40,11 @@ impl RegisterBlock {
     pub const fn irq_pend(&self) -> &IrqPend {
         &self.irq_pend
     }
+    #[doc = "0x18 - Initialized external input mask (one bit per pin)"]
+    #[inline(always)]
+    pub const fn input_initialized(&self) -> &InputInitialized {
+        &self.input_initialized
+    }
 }
 #[doc = "IN (r) register accessor: Input level (one bit per pin, driven by each pin's peer)\n\nYou can [`read`](crate::Reg::read) this register and get [`in_::R`]. See [API](https://docs.rs/svd2rust/#read--modify--write-api).\n\nFor information about available fields see [`mod@in_`] module"]
 #[doc(alias = "IN")]
@@ -70,3 +76,8 @@ pub mod irq_en;
 pub type IrqPend = crate::Reg<irq_pend::IrqPendSpec>;
 #[doc = "Per-pin interrupt pending (write-1-to-clear)"]
 pub mod irq_pend;
+#[doc = "INPUT_INITIALIZED (r) register accessor: Initialized external input mask (one bit per pin)\n\nYou can [`read`](crate::Reg::read) this register and get [`input_initialized::R`]. See [API](https://docs.rs/svd2rust/#read--modify--write-api).\n\nFor information about available fields see [`mod@input_initialized`] module"]
+#[doc(alias = "INPUT_INITIALIZED")]
+pub type InputInitialized = crate::Reg<input_initialized::InputInitializedSpec>;
+#[doc = "Initialized external input mask (one bit per pin)"]
+pub mod input_initialized;

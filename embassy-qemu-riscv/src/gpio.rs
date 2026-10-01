@@ -376,6 +376,12 @@ impl<'d> Input<'d, Async> {
 }
 
 impl<M: Mode> Input<'_, M> {
+    /// Returns whether QEMU's initial input mask includes this pin.
+    #[inline]
+    pub fn is_initialized(&self) -> bool {
+        reg().input_initialized().read().bits() & self.pin.mask() != 0
+    }
+
     /// Returns `true` if the pin's input level is high.
     #[inline]
     pub fn is_high(&self) -> bool {

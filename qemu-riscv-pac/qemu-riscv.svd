@@ -1075,6 +1075,21 @@
             </field>
           </fields>
         </register>
+        <register>
+          <name>INPUT_INITIALIZED</name>
+          <description>Initialized external input mask (one bit per pin)</description>
+          <addressOffset>0x18</addressOffset>
+          <size>32</size>
+          <access>read-only</access>
+          <resetValue>0x00000000</resetValue>
+          <fields>
+            <field>
+              <name>INPUT_INITIALIZED</name>
+              <description>Input level has been explicitly initialized</description>
+              <bitRange>[31:0]</bitRange>
+            </field>
+          </fields>
+        </register>
       </registers>
     </peripheral>
 
